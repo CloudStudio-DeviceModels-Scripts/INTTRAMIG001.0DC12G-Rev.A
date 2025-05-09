@@ -3,13 +3,18 @@ function parseUplink(device, payload)
     // Obtener payload como JSON
     const jsonPayload = payload.asJsonObject();
 
+    // No se puede deserializar el payload como json, salir.
     if (!jsonPayload) { return; }
 
-    const timestamp = jsonPayload.timestamp || null; // ✅ Usaremos esto para temperatura
-    const posTimestamp = jsonPayload.posTimestamp || null;
+    // Verificar que la dirección del dispositivo sea la correcta
+    if (jsonPayload.deviceAddress.toString() !== device.address.toString()) {
+        env.log('Invalid device address');
+        return;
+    }
 
-    // ----------------------------
-    // Actualizar estado de baterías
+    const posTimestamp = (jsonPayload.posTimestamp) ? jsonPayload.posTimestamp : null;
+    
+    // Actualizar estado de las baterías
     if (jsonPayload.battery) {
         const batteries = [];
         for (var [key, value] of Object.entries(jsonPayload.battery)) {
@@ -17,8 +22,7 @@ function parseUplink(device, payload)
         }
         device.updateDeviceBattery(batteries);
     }
-
-    // ----------------------------
+    
     // Actualizar RSSI
     if (jsonPayload.rssi) {
         const rssi = [];
@@ -28,50 +32,28 @@ function parseUplink(device, payload)
         device.updateDeviceRssi(rssi);
     }
 
-    // ----------------------------
-    // Manejo de ubicación (solo si hay)
-    let flags = jsonPayload.flags || locationTrackerFlags.none;
-    const locationTracker = device.endpoints.byAddress(1);
+    // Parsear y almacenar la ubicación
+    let flags = (jsonPayload.flags) ? jsonPayload.flags : locationTrackerFlags.none;
+    var locationTracker = device.endpoints.byAddress(1);
+    locationTracker.updateLocationTrackerStatus(
+        jsonPayload.latitude,
+        jsonPayload.longitude,
+        jsonPayload.altitude,
+        flags,
+        posTimestamp
+    );
 
-    if (jsonPayload.latitude !== undefined && jsonPayload.longitude !== undefined) {
-        locationTracker.updateLocationTrackerStatus(
-            jsonPayload.latitude,
-            jsonPayload.longitude,
-            jsonPayload.altitude || 0,
-            flags,
-            posTimestamp
-        );
-    } else {
-        env.log("No se recibieron datos de ubicación, informando sin posición.");
-        locationTracker.updateLocationTrackerStatus(
-            0, 0, 0,
-            locationTrackerFlags.noPosition
-        );
+    // Parsear y almacenar la temperatura
+    if (jsonPayload.temperature !== undefined && jsonPayload.temperature !== null) {
+        var temperatureSensor = device.endpoints.byAddress(2);
+        temperatureSensor.updateTemperatureSensorStatus(jsonPayload.temperature);
     }
+}
 
-    // ----------------------------
-    // Temperatura (siempre con timestamp, no con posTimestamp) ✅
-    if (jsonPayload.temperature != null) {
-        const temperatureSensor = device.endpoints.byAddress(2);
-
-        if (jsonPayload.temperature < 100 && jsonPayload.temperature !== 0 && jsonPayload.temperature > -25) {
-            temperatureSensor.updateTemperatureSensorStatus(jsonPayload.temperature, timestamp); // ✅ CAMBIO CLAVE
-        } else {
-            env.log("Temperatura fuera del rango operacional", jsonPayload.temperature);
-        }
-    }
-
-    // ----------------------------
-    // Firmware
-    if (jsonPayload.fw != undefined && jsonPayload.fw != null) {
-        const fw = jsonPayload.fw;
-        env.log("fw --> ", fw);
-        let cortar = fw.split('-');
-        let aux = cortar[0];
-        let aux1 = cortar[1];
-        let aux2 = aux.concat(".", aux1);  
-        let text = aux2.toString();     
-        device.updateDeviceFirmwareVersion(text);
-        env.log("text ", text);
-    }
+function buildDownlink(device, endpoint, command, payload)
+{
+    payload.setAsString(command.custom.data);
+    payload.requiresResponse = false;
+	payload.buildResult = downlinkBuildResult.ok;
+    return;
 }
